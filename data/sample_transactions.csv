@@ -1,0 +1,13 @@
+date,description,amount,category,counterparty
+2026-09-01,Opening balance,1850000,opening,
+2026-09-03,Catering invoice paid,420000,revenue,Shinjuku Office Co
+2026-09-05,Rent,-280000,rent,Landlord
+2026-09-10,Ingredients,-310000,cogs,Tsukiji Supply
+2026-09-15,Card settlements,690000,revenue,Card acquirer
+2026-09-25,Payroll,-980000,payroll,Staff
+2026-09-28,Utilities,-62000,utilities,TEPCO
+2026-10-01,Card settlements,610000,revenue,Card acquirer
+2026-10-05,Rent,-280000,rent,Landlord
+2026-10-08,Ingredients,-335000,cogs,Tsukiji Supply
+2026-10-12,Equipment lease,-95000,lease,Lease Co
+2026-10-15,Card settlements,640000,revenue,Card acquirer

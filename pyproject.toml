@@ -1,0 +1,23 @@
+[project]
+name = "cashflow-voice-mcp"
+version = "0.1.0"
+description = "Alexa+ MCP server: a cash-flow copilot for small-business owners"
+requires-python = ">=3.10"
+dependencies = ["mcp>=1.25,<2", "uvicorn"]
+license = { text = "MIT" }
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+cashflow-voice = "cashflow_voice.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]

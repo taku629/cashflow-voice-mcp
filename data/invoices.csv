@@ -1,0 +1,5 @@
+id,counterparty,amount,due_date,direction
+INV-201,Shinjuku Office Co,380000,2026-11-06,receivable
+INV-202,Nakano Events,250000,2026-11-20,receivable
+BILL-88,Tsukiji Supply,340000,2026-11-09,payable
+BILL-89,Lease Co,95000,2026-11-12,payable
