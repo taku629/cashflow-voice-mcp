@@ -6,14 +6,29 @@ Run:  python -m cashflow_voice.server   ->  http://0.0.0.0:8000/mcp
 from __future__ import annotations
 
 import os
-from datetime import date
+import secrets
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from mcp.server.fastmcp import FastMCP
+from starlette.requests import Request
+from starlette.responses import JSONResponse
 
 from . import engine
 
-DATA = Path(__file__).resolve().parents[2] / "data"
+
+def _data_dir() -> Path:
+    """Locate the bundled demo CSVs: CASHFLOW_DATA env, repo checkout, or cwd."""
+    if env := os.environ.get("CASHFLOW_DATA"):
+        return Path(env)
+    for cand in (Path(__file__).resolve().parents[2] / "data", Path.cwd() / "data"):
+        if (cand / "sample_transactions.csv").exists():
+            return cand
+    return Path(__file__).resolve().parents[2] / "data"
+
+
+DATA = _data_dir()
 DEFAULT_BUSINESS = "demo-cafe"
 
 store = engine.Store(os.environ.get("CASHFLOW_DB", ":memory:"))
@@ -36,7 +51,8 @@ mcp = FastMCP(
 
 def _today() -> date:
     override = os.environ.get("CASHFLOW_TODAY")
-    return date.fromisoformat(override) if override else date.today()
+    # JST "today": users are Japan-based SMBs, and cloud hosts usually run on UTC.
+    return date.fromisoformat(override) if override else datetime.now(ZoneInfo("Asia/Tokyo")).date()
 
 
 def _ensure_demo(business: str) -> None:
@@ -50,6 +66,11 @@ def _fc(business: str, weeks: int = 13) -> dict:
     return engine.forecast(store.txns(business), store.invoices(business), _today(), weeks)
 
 
+@mcp.custom_route("/healthz", methods=["GET"])
+async def health(_request: Request) -> JSONResponse:
+    return JSONResponse({"status": "ok"})
+
+
 @mcp.tool()
 def import_transactions(csv_text: str, business: str = DEFAULT_BUSINESS) -> dict:
     """Import bank transactions from CSV text (columns: date, description, amount[, category, counterparty]).
@@ -60,10 +81,18 @@ def import_transactions(csv_text: str, business: str = DEFAULT_BUSINESS) -> dict
 
 
 @mcp.tool()
+def import_invoices(csv_text: str, business: str = DEFAULT_BUSINESS) -> dict:
+    """Import open invoices from CSV text (columns: id, counterparty, amount, due_date,
+    direction[receivable|payable]). Replaces the business's previous invoice list."""
+    n = store.load_invoices(business, csv_text)
+    return {"rows": n, "speech": f"Loaded {n} open invoices."}
+
+
+@mcp.tool()
 def cash_position(business: str = DEFAULT_BUSINESS) -> dict:
     """Current cash balance plus a one-sentence spoken summary of the 13-week outlook."""
     fc = _fc(business)
-    return {"balance": fc["opening_balance"], "speech": f"You have {fc['opening_balance']:,} yen today. " + engine.runway_summary(fc)}
+    return {"balance": fc["opening_balance"], "speech": f"You have {engine.yen_speech(fc['opening_balance'])} today. " + engine.runway_summary(fc)}
 
 
 @mcp.tool()
@@ -105,26 +134,32 @@ def propose_action(kind: str, invoice_id: str = "", note: str = "", business: st
 @mcp.tool()
 def confirm_action(action_id: str, confirmation_code: str, business: str = DEFAULT_BUSINESS) -> dict:
     """Execute a proposed action in the sandbox once the owner reads back its confirmation code."""
-    return store.confirm(business, action_id, confirmation_code)
+    res = store.confirm(business, action_id, confirmation_code)
+    res["speech"] = ("Done — it ran in the sandbox, so no real money moved."
+                     if res.get("ok") else f"That didn't work: {res.get('reason')}.")
+    return res
 
 
 @mcp.tool()
 def cancel_action(action_id: str, business: str = DEFAULT_BUSINESS) -> dict:
     """Cancel a pending proposed action."""
-    return store.cancel(business, action_id)
+    res = store.cancel(business, action_id)
+    res["speech"] = "Cancelled." if res.get("ok") else "Nothing to cancel — that action isn't pending."
+    return res
 
 
 @mcp.tool()
 def remember(note: str, business: str = DEFAULT_BUSINESS) -> dict:
     """Save a fact the owner wants remembered across sessions (e.g. 'payroll is always the 25th')."""
     store.add_note(business, note)
-    return {"ok": True}
+    return {"ok": True, "speech": "Got it — I'll remember that."}
 
 
 @mcp.tool()
 def recall(business: str = DEFAULT_BUSINESS) -> dict:
     """Return saved owner notes so a new Alexa session picks up where the last left off."""
-    return {"notes": store.notes(business)}
+    notes = store.notes(business)
+    return {"notes": notes, "speech": f"I have {len(notes)} note{'s' if len(notes) != 1 else ''} on file."}
 
 
 @mcp.tool()
@@ -133,8 +168,42 @@ def audit_log(limit: int = 20, business: str = DEFAULT_BUSINESS) -> dict:
     return {"events": store.audit_trail(business, limit)}
 
 
+def _bearer_wrap(app):
+    """Optional static bearer token (env CASHFLOW_TOKEN) around the ASGI app.
+
+    Unauthenticated requests get a bare 401 — Alexa+ explicitly requires NO
+    WWW-Authenticate header on 401s during discovery. Unset token = open
+    access, which keeps local development frictionless.
+    """
+
+    async def wrapped(scope, receive, send):
+        token = os.environ.get("CASHFLOW_TOKEN")
+        if not token or scope["type"] != "http" or scope["path"] == "/healthz":
+            return await app(scope, receive, send)
+        headers = dict(scope.get("headers") or [])
+        auth = headers.get(b"authorization", b"").decode("latin-1")
+        if not (auth.startswith("Bearer ") and secrets.compare_digest(auth[7:].strip(), token)):
+            body = b'{"error":"unauthorized"}'
+            await send({
+                "type": "http.response.start", "status": 401,
+                "headers": [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode())],
+            })
+            await send({"type": "http.response.body", "body": body})
+            return
+        return await app(scope, receive, send)
+
+    return wrapped
+
+
+def build_app():
+    """ASGI app = Streamable-HTTP MCP app + optional bearer auth. Uvicorn-servable."""
+    return _bearer_wrap(mcp.streamable_http_app())
+
+
 def main() -> None:
-    mcp.run(transport="streamable-http")
+    import uvicorn
+
+    uvicorn.run(build_app(), host=os.environ.get("HOST", "0.0.0.0"), port=int(os.environ.get("PORT", "8000")))
 
 
 if __name__ == "__main__":

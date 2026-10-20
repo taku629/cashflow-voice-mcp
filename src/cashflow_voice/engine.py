@@ -37,7 +37,7 @@ def parse_transactions(csv_text: str) -> list[Txn]:
     for i, raw in enumerate(reader, start=2):
         r = {k.strip().lower(): (v or "").strip() for k, v in raw.items() if k}
         try:
-            amt = int(round(float(r["amount"].replace(",", ""))))
+            amt = round(float(r["amount"].replace(",", "")))
             d = date.fromisoformat(r["date"])
         except ValueError as exc:
             raise ValueError(f"Row {i}: {exc}") from exc
@@ -103,7 +103,7 @@ class Store:
 
     def invoices(self, business: str) -> list[dict]:
         cur = self.db.execute("select id,counterparty,amount,due,direction from invoices where business=? order by due", (business,))
-        return [dict(id=i, counterparty=c, amount=a, due=d, direction=dr) for i, c, a, d, dr in cur]
+        return [{"id": i, "counterparty": c, "amount": a, "due": d, "direction": dr} for i, c, a, d, dr in cur]
 
     def add_note(self, business: str, note: str) -> None:
         self.db.execute("insert into notes values(?,?,?)", (business, _now(), note[:500]))
@@ -146,6 +146,25 @@ class Store:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+# --- spoken formatting -------------------------------------------------------
+
+def yen_speech(amount: int) -> str:
+    """Yen amount phrased for a spoken reply: 1,868,000 -> '1.87 million yen',
+    565,168 -> '565,000 yen'. Exact figures stay in the JSON fields."""
+    a = abs(int(amount))
+    if a >= 1_000_000:
+        return f"{a / 1_000_000:.2f}".rstrip("0").rstrip(".") + " million yen"
+    if a >= 10_000:
+        return f"{round(a, -3):,} yen"
+    return f"{a:,} yen"
+
+
+def week_label(iso_week_start: str) -> str:
+    """'2026-12-21' -> 'December 21' (TTS reads ISO dates badly)."""
+    d = date.fromisoformat(iso_week_start)
+    return f"{d.strftime('%B')} {d.day}"
 
 
 # --- analytics -------------------------------------------------------------
@@ -222,12 +241,13 @@ def forecast(txns: list[Txn], invoices: list[dict], start: date, weeks: int = 13
 
 
 def runway_summary(fc: dict, buffer: int = 300_000) -> str:
+    low_week = week_label(fc["lowest_week"])
     if fc["shortfall"]:
-        return (f"Warning: cash is projected to dip to {fc['lowest_balance']:,} yen in the week of {fc['lowest_week']}. "
-                "Ask me for a shortfall plan.")
+        return f"Warning: cash dips below zero in the week of {low_week} — ask me for a shortfall plan."
     if fc["lowest_balance"] < buffer:
-        return (f"Cash stays positive but gets thin: the low point is {fc['lowest_balance']:,} yen in the week of {fc['lowest_week']}.")
-    return f"You're covered for the next {len(fc['weeks'])} weeks. The low point is {fc['lowest_balance']:,} yen in the week of {fc['lowest_week']}."
+        return (f"Cash stays positive but gets thin: about {yen_speech(fc['lowest_balance'])} "
+                f"in the week of {low_week}.")
+    return f"You're covered for the next {len(fc['weeks'])} weeks; the low point is about {yen_speech(fc['lowest_balance'])}."
 
 
 def can_afford(fc: dict, amount: int, on: date, buffer: int = 300_000) -> dict:
@@ -238,12 +258,17 @@ def can_afford(fc: dict, amount: int, on: date, buffer: int = 300_000) -> dict:
         after.append(bal)
     low = min(after)
     ok = low >= buffer
+    if ok:
+        speech = f"Yes — even after paying {yen_speech(amount)}, your lowest balance stays around {yen_speech(low)}."
+    elif low < 0:
+        speech = f"Not safely — paying {yen_speech(amount)} would leave you about {yen_speech(low)} below zero."
+    else:
+        speech = f"Not safely — paying {yen_speech(amount)} would take your low point to {yen_speech(low)}, under your {yen_speech(buffer)} buffer."
     return {
         "affordable": ok,
         "lowest_balance_after": low,
         "buffer": buffer,
-        "speech": (f"Yes. Even after paying {amount:,} yen, your lowest balance would be {low:,} yen."
-                   if ok else f"Not safely. Paying {amount:,} yen would take your low point to {low:,} yen, under your {buffer:,} yen buffer."),
+        "speech": speech,
     }
 
 
@@ -273,5 +298,5 @@ def shortfall_plan(fc: dict, invoices: list[dict], buffer: int = 300_000) -> dic
     return {
         "needed": gap,
         "options": chosen,
-        "speech": f"You need about {gap:,} yen to stay above your buffer. The best first step is: {first['note'].lower()} ({first.get('invoice', 'credit line')}). Want me to draft it?",
+        "speech": f"You need about {yen_speech(gap)} to stay above your buffer. The best first step: {first['note'].lower()} ({first.get('invoice', 'credit line')}). Want me to draft it?",
     }

@@ -3,6 +3,9 @@ services:
     name: cashflow-voice-mcp
     runtime: docker
     plan: free
+    healthCheckPath: /healthz
     envVars:
       - key: CASHFLOW_DB
         value: /tmp/cashflow.db
+      - key: CASHFLOW_TOKEN
+        generateValue: true   # random bearer token, shown once in the Render dashboard
