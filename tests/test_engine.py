@@ -1,6 +1,9 @@
+import re
 from datetime import date
 from pathlib import Path
+
 import pytest
+
 from cashflow_voice import engine
 
 DATA = Path(__file__).resolve().parents[1] / "data"
@@ -72,3 +75,19 @@ def test_notes_persist(tmp_path):
     db = tmp_path / "x.db"
     engine.Store(db).add_note("b", "payroll is the 25th")
     assert engine.Store(db).notes("b")[0]["note"] == "payroll is the 25th"
+
+def test_yen_speech():
+    assert engine.yen_speech(1_868_000) == "1.87 million yen"
+    assert engine.yen_speech(1_000_000) == "1 million yen"
+    assert engine.yen_speech(-457_668) == "458,000 yen"
+    assert engine.yen_speech(565_168) == "565,000 yen"
+    assert engine.yen_speech(9_500) == "9,500 yen"
+
+def test_speech_is_voice_friendly():
+    s = load()
+    fc = engine.forecast(s.txns("b"), s.invoices("b"), date(2026, 10, 19))
+    summary = engine.runway_summary(fc)
+    assert not re.search(r"\d{4}-\d{2}-\d{2}", summary)  # no ISO dates for TTS
+    assert not re.search(r"-[\d,]+ yen", summary)         # negatives read as "below zero"
+    res = engine.can_afford(fc, 10**9, date(2026, 11, 1))
+    assert "below zero" in res["speech"]

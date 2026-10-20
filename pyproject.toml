@@ -7,7 +7,7 @@ dependencies = ["mcp>=1.25,<2", "uvicorn"]
 license = { text = "MIT" }
 
 [project.optional-dependencies]
-dev = ["pytest"]
+dev = ["pytest", "httpx2", "ruff==0.16.10"]
 
 [project.scripts]
 cashflow-voice = "cashflow_voice.server:main"
