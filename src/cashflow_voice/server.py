@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import time
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -56,14 +57,25 @@ def _today() -> date:
 
 
 def _ensure_demo(business: str) -> None:
-    if business == DEFAULT_BUSINESS and not store.txns(business):
+    if business == DEFAULT_BUSINESS and not store.has_txns(business):
         store.load_transactions(business, engine.parse_transactions((DATA / "sample_transactions.csv").read_text()))
         store.load_invoices(business, (DATA / "invoices.csv").read_text())
 
 
+_fc_cache: dict[tuple, dict] = {}
+
+
 def _fc(business: str, weeks: int = 13) -> dict:
+    """Forecast, memoized on (business, weeks, today, data version). Repeat calls
+    skip the ledger scan + pattern rebuild; any import invalidates via version bump."""
     _ensure_demo(business)
-    return engine.forecast(store.txns(business), store.invoices(business), _today(), weeks)
+    today = _today()
+    key = (business, weeks, today, store.version(business))
+    if key not in _fc_cache:
+        if len(_fc_cache) > 256:
+            _fc_cache.clear()
+        _fc_cache[key] = engine.forecast(store.txns(business), store.invoices(business), today, weeks)
+    return _fc_cache[key]
 
 
 @mcp.custom_route("/healthz", methods=["GET"])
@@ -99,8 +111,7 @@ def cash_position(business: str = DEFAULT_BUSINESS) -> dict:
 def forecast_cashflow(weeks: int = 13, business: str = DEFAULT_BUSINESS) -> dict:
     """Week-by-week cash forecast (default 13 weeks, max 26) with the drivers behind each week."""
     fc = _fc(business, weeks)
-    fc["speech"] = engine.runway_summary(fc)
-    return fc
+    return {**fc, "speech": engine.runway_summary(fc)}
 
 
 @mcp.tool()
@@ -195,9 +206,30 @@ def _bearer_wrap(app):
     return wrapped
 
 
+def _timed(app):
+    """Add X-Response-Time-Ms to every response: makes the <500ms Alexa+
+    latency budget measurable by judges (and in the demo video)."""
+
+    async def wrapped(scope, receive, send):
+        if scope["type"] != "http":
+            return await app(scope, receive, send)
+        t0 = time.perf_counter()
+
+        async def send_timed(message):
+            if message["type"] == "http.response.start":
+                ms = f"{(time.perf_counter() - t0) * 1000:.1f}".encode()
+                headers = list(message.get("headers") or []) + [(b"x-response-time-ms", ms)]
+                message = {**message, "headers": headers}
+            await send(message)
+
+        return await app(scope, receive, send_timed)
+
+    return wrapped
+
+
 def build_app():
-    """ASGI app = Streamable-HTTP MCP app + optional bearer auth. Uvicorn-servable."""
-    return _bearer_wrap(mcp.streamable_http_app())
+    """ASGI app = Streamable-HTTP MCP app + optional bearer auth + timing. Uvicorn-servable."""
+    return _timed(_bearer_wrap(mcp.streamable_http_app()))
 
 
 def main() -> None:

@@ -6,10 +6,12 @@ functions, so answers are reproducible and auditable.
 from __future__ import annotations
 
 import csv
+import functools
 import io
 import json
 import secrets
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -47,11 +49,27 @@ def parse_transactions(csv_text: str) -> list[Txn]:
     return rows
 
 
+def _locked(fn):
+    """Serialize a Store method: one sqlite connection is shared across requests."""
+
+    @functools.wraps(fn)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return fn(self, *args, **kwargs)
+
+    return wrapper
+
+
 class Store:
     """Per-business persistent memory (SQLite) so context survives across Alexa sessions."""
 
     def __init__(self, path: str | Path = ":memory:"):
+        self._lock = threading.RLock()
+        self._ver: dict[str, int] = {}
         self.db = sqlite3.connect(str(path), check_same_thread=False)
+        if str(path) != ":memory:":
+            self.db.execute("pragma journal_mode=wal")
+            self.db.execute("pragma synchronous=normal")
         self.db.executescript(
             """
             create table if not exists txns(business text, day text, description text, amount int, category text, counterparty text);
@@ -63,6 +81,7 @@ class Store:
         )
 
     # --- audit ---------------------------------------------------------
+    @_locked
     def log(self, business: str, event: str, detail: dict) -> None:
         self.db.execute("insert into audit values(?,?,?,?)", (_now(), business, event, json.dumps(detail, ensure_ascii=False)))
         self.db.commit()
@@ -72,6 +91,15 @@ class Store:
         return [{"ts": ts, "event": ev, "detail": json.loads(d)} for ts, ev, d in cur]
 
     # --- data ----------------------------------------------------------
+    def version(self, business: str) -> int:
+        """Bumped on every ledger/invoice write; lets callers memoize forecasts."""
+        return self._ver.get(business, 0)
+
+    def has_txns(self, business: str) -> bool:
+        """O(1) existence check — use instead of loading the whole ledger."""
+        return self.db.execute("select 1 from txns where business=? limit 1", (business,)).fetchone() is not None
+
+    @_locked
     def load_transactions(self, business: str, txns: list[Txn], replace: bool = True) -> int:
         if replace:
             self.db.execute("delete from txns where business=?", (business,))
@@ -80,9 +108,11 @@ class Store:
             [(business, t.day.isoformat(), t.description, t.amount, t.category, t.counterparty) for t in txns],
         )
         self.db.commit()
+        self._ver[business] = self.version(business) + 1
         self.log(business, "import_transactions", {"rows": len(txns)})
         return len(txns)
 
+    @_locked
     def load_invoices(self, business: str, csv_text: str) -> int:
         reader = csv.DictReader(io.StringIO(csv_text.strip()))
         self.db.execute("delete from invoices where business=?", (business,))
@@ -94,6 +124,7 @@ class Store:
             )
             n += 1
         self.db.commit()
+        self._ver[business] = self.version(business) + 1
         self.log(business, "import_invoices", {"rows": n})
         return n
 
@@ -105,6 +136,7 @@ class Store:
         cur = self.db.execute("select id,counterparty,amount,due,direction from invoices where business=? order by due", (business,))
         return [{"id": i, "counterparty": c, "amount": a, "due": d, "direction": dr} for i, c, a, d, dr in cur]
 
+    @_locked
     def add_note(self, business: str, note: str) -> None:
         self.db.execute("insert into notes values(?,?,?)", (business, _now(), note[:500]))
         self.db.commit()
@@ -114,6 +146,7 @@ class Store:
         return [{"ts": ts, "note": n} for ts, n in cur]
 
     # --- human-in-the-loop actions --------------------------------------
+    @_locked
     def propose(self, business: str, kind: str, payload: dict) -> dict:
         aid = "ACT-" + secrets.token_hex(3).upper()
         code = f"{secrets.randbelow(10000):04d}"
@@ -122,6 +155,7 @@ class Store:
         self.log(business, "propose_action", {"id": aid, "kind": kind, **payload})
         return {"action_id": aid, "status": "pending", "confirmation_code": code}
 
+    @_locked
     def confirm(self, business: str, action_id: str, code: str) -> dict:
         row = self.db.execute("select kind,payload,status,code from actions where id=? and business=?", (action_id, business)).fetchone()
         if not row:
@@ -137,6 +171,7 @@ class Store:
         self.log(business, "execute_sandbox", {"id": action_id, "kind": kind})
         return {"ok": True, "action_id": action_id, "kind": kind, "payload": json.loads(payload), "mode": "sandbox (no real money moves)"}
 
+    @_locked
     def cancel(self, business: str, action_id: str) -> dict:
         cur = self.db.execute("update actions set status='cancelled' where id=? and business=? and status='pending'", (action_id, business))
         self.db.commit()
