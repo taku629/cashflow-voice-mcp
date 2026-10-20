@@ -3,7 +3,7 @@ name = "cashflow-voice-mcp"
 version = "0.1.0"
 description = "Alexa+ MCP server: a cash-flow copilot for small-business owners"
 requires-python = ">=3.10"
-dependencies = ["mcp>=1.25,<2", "uvicorn"]
+dependencies = ["mcp>=1.25,<2", "uvicorn[standard]"]
 license = { text = "MIT" }
 
 [project.optional-dependencies]

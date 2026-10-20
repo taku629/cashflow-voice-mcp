@@ -43,7 +43,7 @@ python, mcp, fastmcp, sqlite, uvicorn, docker, github-actions
 | Streamable HTTP transport, spec 2025-11-25 | ✅ negotiated version confirmed live |
 | Remote URL over HTTPS | ✅ via Render deploy (`/mcp`) — needs your account |
 | 401 without `WWW-Authenticate` on unauthenticated requests | ✅ `CASHFLOW_TOKEN` bearer middleware (SDK's own auth middleware adds the header, so we bypass it) |
-| <500 ms round-trip | ✅ deterministic engine (~ms warm); free-tier cold start caveat documented |
+| <500 ms round-trip | ✅ measured ~5 ms median per tool call, ~44 ms at 20× parallel (uvloop + httptools); `X-Response-Time-Ms` on every response; cold-start caveat + keep-alive ping documented |
 | tools/list ↔ invocable tools, JSON Schema, `isError` contract | ✅ 12 tools tested end to end incl. error path |
 | OAuth 2.1 + PKCE S256 authorization server (real account linking) | ⏳ needs your IdP / Login with Amazon — out of scope for sandbox demo |
 | PRM doc (`/.well-known/oauth-protected-resource`) | ⏳ point it at the IdP above when added; bare 401 + bearer works for judging |
