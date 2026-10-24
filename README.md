@@ -1,5 +1,11 @@
 # Cashflow Voice — an Alexa+ MCP server for small-business cash flow
 
+[![ci](https://github.com/taku629/cashflow-voice-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/taku629/cashflow-voice-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+**Live endpoint:** `https://cashflow-voice-mcp.onrender.com/mcp` (bearer-token protected) ·
+health check: [`/healthz`](https://cashflow-voice-mcp.onrender.com/healthz)
+
 > "Alexa, can I make payroll next month?"
 > "You have 1.87 million yen today. Cash dips below zero in the week of December 21 — want a plan?"
 
@@ -7,6 +13,19 @@ Cashflow Voice is a **self-hosted MCP server (spec 2025-11-25, Streamable HTTP)*
 **Alexa+ track** (priority category: *business systems*). It turns a café or shop owner's
 bank CSV and open invoices into spoken answers, a 13-week forecast, and a ranked plan to
 avoid a cash crunch — and it never moves money without a spoken confirmation code.
+
+![Cashflow Voice demo: balance, affordability, shortfall plan, spoken confirmation code](docs/media/demo.gif)
+
+## Demo video
+
+[**▶ Watch the 90-second demo (MP4)**](docs/media/cashflow-voice-demo.mp4) — a simulated Alexa+
+conversation (TTS voices) where every number and tool result is real output from this server,
+pinned to `CASHFLOW_TODAY=2026-10-19` with the bundled demo café data. Reproduce it yourself with
+`python scripts/demo_client.py` (see below).
+
+| Affordability check | Spoken confirmation code → sandbox execution |
+|---|---|
+| ![can_i_afford](docs/media/screenshot-affordability.png) | ![confirm_action](docs/media/screenshot-confirm.png) |
 
 ## Why
 
@@ -34,8 +53,9 @@ floor, not in spreadsheets. Voice is where they already are (kitchen, counter, c
 ```mermaid
 flowchart LR
     U(["Owner's voice"]) --> A
-    A["Alexa+ (MCP client)"] -- "Streamable HTTP / MCP 2025-11-25" --> M["cashflow-voice MCP server"]
-    M --> T["tools"]
+    A["Alexa+ (MCP client)"] -- "Streamable HTTP / MCP 2025-11-25<br>Authorization: Bearer" --> G["bearer check<br>(bare 401, no WWW-Authenticate)"]
+    G --> M["cashflow-voice MCP server<br>(FastMCP, stateless JSON)"]
+    M --> T["12 tools"]
     T --> E["Deterministic engine<br>recurring-pattern + open invoices"]
     T --> D[("SQLite (CASHFLOW_DB)<br>per-business memory · actions · audit")]
     subgraph hitl["Human-in-the-loop money"]
@@ -54,7 +74,7 @@ flowchart LR
 
 ```bash
 pip install -e ".[dev]"
-ruff check . && pytest -q                    # lint + 17 tests
+ruff check . && pytest -q                    # lint + 18 tests
 CASHFLOW_TODAY=2026-10-19 cashflow-voice     # serves http://0.0.0.0:8000/mcp
 python scripts/demo_client.py http://127.0.0.1:8000/mcp
 ```
@@ -107,11 +127,27 @@ calls — comfortably inside Alexa+'s 500 ms budget. Every response carries an
 memoized per (business, week-count, day, data-version) and SQLite runs WAL + a single
 locked connection.
 
+## Example Alexa+ utterances
+
+| Say to Alexa+ | Tool called | Answer (demo data, today = 2026-10-19) |
+|---|---|---|
+| "How's my cash?" | `cash_position` | "You have 1.87 million yen today. Warning: cash dips below zero in the week of December 21…" |
+| "Can I buy a new oven for 400,000 yen on November 2nd?" | `can_i_afford` | "Not safely — paying 400,000 yen would leave you about 665,000 yen below zero." |
+| "What should I do?" | `shortfall_plan` | "You need about 565,000 yen to stay above your buffer. The best first step: … (BILL-88)." |
+| "Do it." | `propose_action` | "I've prepared that. To confirm, say the code 5 9 7 8." (random each time) |
+| "Five nine seven eight." | `confirm_action` | "Done — it ran in the sandbox, so no real money moved." |
+| "Never mind, cancel that." | `cancel_action` | "Cancelled." |
+| "What does the next quarter look like?" | `forecast_cashflow` | Week-by-week balances + drivers, one-sentence summary |
+| "Remember payroll is always the 25th." / "What do you know about my business?" | `remember` / `recall` | "Got it — I'll remember that." / "I have 1 note on file." |
+| "What have you done today?" | `audit_log` | Timestamped imports, questions, proposals, confirmations |
+
 ## How judges can test it
 
+- **Live:** `curl https://cashflow-voice-mcp.onrender.com/healthz` → `{"status":"ok"}`.
+  `/mcp` requires the bearer token (unauthenticated calls get a bare `401`), so for hands-on
+  testing run it locally — it takes under a minute and needs no token.
 - **MCP Inspector:** `npx @modelcontextprotocol/inspector` → Streamable HTTP →
-  `https://<service>.onrender.com/mcp` (+ `Authorization: Bearer <token>`).
-  Locally: `http://127.0.0.1:8000/mcp`, no auth needed.
+  `http://127.0.0.1:8000/mcp` (no auth locally), or your own deploy + `Authorization: Bearer <token>`.
 - **Scripted conversation:** `python scripts/demo_client.py <url>` runs the whole story —
   balance → affordability → shortfall plan → propose → confirm (sandbox) → remember → audit.
 - **Nothing real ever moves:** `confirm_action` only executes in sandbox mode, and only
@@ -120,10 +156,10 @@ locked connection.
 ## Demo walkthrough (the story the video tells)
 
 1. *"Alexa, how's my cash?"* → `cash_position` → "You have 1.87 million yen today…"
-2. *"Can I buy a new oven for 400,000 yen on November 2nd?"* → `can_i_afford` → not safely.
+2. *"Can I buy a new oven for 400,000 yen on November 2nd?"* → `can_i_afford` → "Not safely — … about 665,000 yen below zero."
 3. *"What should I do?"* → `shortfall_plan` → defer BILL-88 (supplier) first.
-4. *"Do it."* → `propose_action` returns e.g. `ACT-64D28E` + code `3 9 6 3`.
-5. *"Three nine six three."* → `confirm_action` → executed in sandbox; `audit_log` shows the trail.
+4. *"Do it."* → `propose_action` returns e.g. `ACT-7BA2EF` + code `5 9 7 8` (random per proposal).
+5. *"Five nine seven eight."* → `confirm_action` → executed in sandbox; `audit_log` shows the trail.
 6. New session → `recall` → "payroll is always the 25th" survived the restart.
 
 ## Demo data
@@ -133,4 +169,4 @@ Import your own via `import_transactions` / `import_invoices` — every business
 
 ## License
 
-MIT
+[MIT](LICENSE)
