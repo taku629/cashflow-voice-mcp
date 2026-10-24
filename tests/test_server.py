@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 import pytest
@@ -42,6 +43,24 @@ def test_bearer_blocks_and_allows(client, monkeypatch):
     r = client.post("/mcp", json=INIT, headers={**HEADERS, "Authorization": "Bearer s3cret"})
     assert r.status_code == 200
     assert r.json()["result"]["protocolVersion"] == "2025-11-25"
+
+
+def test_non_ascii_bearer_is_401_not_500(monkeypatch):
+    monkeypatch.setenv("CASHFLOW_TOKEN", "abc123")
+    app = server._bearer_wrap(lambda *a: None)
+    scope = {"type": "http", "path": "/mcp", "method": "POST",
+             "headers": [(b"authorization", "Bearer ••••9ef1".encode())]}
+    sent = []
+
+    async def receive():
+        return {"type": "http.request", "body": b""}
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(app(scope, receive, send))
+    assert sent[0]["type"] == "http.response.start"
+    assert sent[0]["status"] == 401
 
 
 def test_import_invoices_tool(client, monkeypatch):

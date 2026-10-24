@@ -192,8 +192,8 @@ def _bearer_wrap(app):
         if not token or scope["type"] != "http" or scope["path"] == "/healthz":
             return await app(scope, receive, send)
         headers = dict(scope.get("headers") or [])
-        auth = headers.get(b"authorization", b"").decode("latin-1")
-        if not (auth.startswith("Bearer ") and secrets.compare_digest(auth[7:].strip(), token)):
+        auth = headers.get(b"authorization", b"")
+        if not (auth.startswith(b"Bearer ") and secrets.compare_digest(auth[7:].strip(), token.strip().encode("utf-8"))):
             body = b'{"error":"unauthorized"}'
             await send({
                 "type": "http.response.start", "status": 401,
@@ -234,6 +234,11 @@ def build_app():
 
 def main() -> None:
     import uvicorn
+
+    token = os.environ.get("CASHFLOW_TOKEN", "")
+    if token and (not token.isascii() or token != token.strip()):
+        print("WARNING: CASHFLOW_TOKEN should be plain ASCII with no surrounding spaces; "
+              "HTTP clients (incl. Alexa+) cannot reliably send other bytes in a header.", flush=True)
 
     uvicorn.run(build_app(), host=os.environ.get("HOST", "0.0.0.0"), port=int(os.environ.get("PORT", "8000")))
 

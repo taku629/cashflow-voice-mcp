@@ -1,8 +1,10 @@
 # Devpost submission draft — Cashflow Voice
 
+> Paste-ready gallery copy lives in [`devpost-gallery.md`](devpost-gallery.md).
+
 **Track:** Alexa+ (self-hosted MCP server, spec 2025-11-25, Streamable HTTP)
 **Mini challenge:** Open Source (MIT-licensed public repo) — optional: AWS Builder if deployed with an AWS service
-**Deadline:** Oct 23, 2026 12:00 PDT = Oct 24, 2026 04:00 JST
+**Deadline:** Oct 24, 2026 12:00 PDT = Oct 25, 2026 04:00 JST
 
 ## Inspiration
 Small businesses rarely fail for lack of customers — they run out of cash. Owners are behind
@@ -41,7 +43,7 @@ python, mcp, fastmcp, sqlite, uvicorn, docker, github-actions
 | Requirement (per Alexa+ MCP QuickStart) | Status |
 |---|---|
 | Streamable HTTP transport, spec 2025-11-25 | ✅ negotiated version confirmed live |
-| Remote URL over HTTPS | ✅ via Render deploy (`/mcp`) — needs your account |
+| Remote URL over HTTPS | ✅ live at `https://cashflow-voice-mcp.onrender.com/mcp` (Render, `render.yaml`) |
 | 401 without `WWW-Authenticate` on unauthenticated requests | ✅ `CASHFLOW_TOKEN` bearer middleware (SDK's own auth middleware adds the header, so we bypass it) |
 | <500 ms round-trip | ✅ measured ~5 ms median per tool call, ~44 ms at 20× parallel (uvloop + httptools); `X-Response-Time-Ms` on every response; cold-start caveat + keep-alive ping documented |
 | tools/list ↔ invocable tools, JSON Schema, `isError` contract | ✅ 12 tools tested end to end incl. error path |
@@ -86,7 +88,7 @@ the week of December twenty-first — want a shortfall plan?"
 
 **0:35–0:55 — Affordability.**
 **OWNER:** "Can I buy a new oven for 400,000 yen on November 2nd?"
-**ALEXA:** "Not safely — paying 400,000 yen would leave you about 858,000 yen below zero."
+**ALEXA:** "Not safely — paying 400,000 yen would leave you about 665,000 yen below zero."
 **CAPTION:** `can_i_afford` returns `affordable: false` + lowest-balance figure.
 
 **0:55–1:25 — Plan.**
@@ -122,4 +124,4 @@ with a TTS voice-over for the ALEXA lines — the tool output is identical.)
 - [ ] Text description (above)
 - [ ] Product feedback filled in
 - [ ] Track: Alexa+; mini challenge fields
-- [ ] Submit on Devpost before Oct 24 04:00 JST
+- [ ] Submit on Devpost before Oct 25 04:00 JST
